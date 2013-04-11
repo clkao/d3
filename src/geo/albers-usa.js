@@ -1,5 +1,65 @@
 import "conic-equal-area";
 import "geo";
+//import "composite";
+
+d3.geo.composite = function() {
+  var components = [];
+  var projection_chooser;
+
+  function composite(coordinates) {
+    return projection_chooser(coordinates)(coordinates);
+  };
+
+  composite.scale = function(x) {
+    if (!arguments.length) return components[0].projection.scale();
+    components.forEach(function(c) {
+        c.projection.scale(x * c.params.scale);
+    });
+    return composite.translate(components[0].projection.translate());
+  };
+
+  composite.translate = function(x) {
+    if (!arguments.length) return components[0].projection.translate();
+
+    var dz = components[0].projection.scale(),
+        dx = x[0],
+        dy = x[1];
+    components.forEach(function(c) {
+      var t = c.params.translate;
+      c.projection.translate([dx + t[0] * dz, dy + t[1] * dz]);
+      if (c.params.extent)
+        c.invert = d3_geo_albersUsaInvert(c.projection, c.params.extent);
+    });
+
+    return composite;
+  };
+
+  composite.add = function(projection, params) {
+    var invert = null;
+    if (!params.scale) params.scale = 1
+    if (!params.translate) params.translate = [0,0]
+    if (params.extent)
+      invert = d3_geo_albersUsaInvert(projection, params.extent);
+    else
+      invert = projection.invert;
+    components.push({projection: projection, params: params, invert: invert});
+    return composite;
+  };
+
+  composite.projection = function(p) {
+    if (!arguments.length) return projection;
+    projection_chooser = p;
+    return composite;
+  };
+  composite.invert = function(coordinates) {
+    return components.reverse().reduce(function(a, b) {
+      if (a) return a;
+      return b.invert(coordinates);
+    }, null);
+  };
+
+  return composite;
+};
 
 // A composite projection for the United States, 960×500. The set of standard
 // parallels for each region comes from USGS, which is published here:
@@ -25,14 +85,6 @@ d3.geo.albersUsa = function() {
       .center([0, 10])
       .parallels([8, 18]);
 
-  var alaskaInvert,
-      hawaiiInvert,
-      puertoRicoInvert;
-
-  function albersUsa(coordinates) {
-    return projection(coordinates)(coordinates);
-  }
-
   function projection(point) {
     var lon = point[0],
         lat = point[1];
@@ -42,37 +94,16 @@ d3.geo.albersUsa = function() {
         : lower48;
   }
 
-  albersUsa.invert = function(coordinates) {
-    return alaskaInvert(coordinates) || hawaiiInvert(coordinates) || puertoRicoInvert(coordinates) || lower48.invert(coordinates);
-  };
-
-  albersUsa.scale = function(x) {
-    if (!arguments.length) return lower48.scale();
-    lower48.scale(x);
-    alaska.scale(x * .6);
-    hawaii.scale(x);
-    puertoRico.scale(x * 1.5);
-    return albersUsa.translate(lower48.translate());
-  };
-
-  albersUsa.translate = function(x) {
-    if (!arguments.length) return lower48.translate();
-    var dz = lower48.scale(),
-        dx = x[0],
-        dy = x[1];
-    lower48.translate(x);
-    alaska.translate([dx - .40 * dz, dy + .17 * dz]);
-    hawaii.translate([dx - .19 * dz, dy + .20 * dz]);
-    puertoRico.translate([dx + .58 * dz, dy + .43 * dz]);
-
-    alaskaInvert = d3_geo_albersUsaInvert(alaska, [[-180, 50], [-130, 72]]);
-    hawaiiInvert = d3_geo_albersUsaInvert(hawaii, [[-164, 18], [-154, 24]]);
-    puertoRicoInvert = d3_geo_albersUsaInvert(puertoRico, [[-67.5, 17.5], [-65, 19]]);
-
-    return albersUsa;
-  };
-
-  return albersUsa.scale(1000);
+  return d3.geo.composite()
+      .add(lower48, {})
+      .add(puertoRico,
+           {translate: [.58, .43],  scale: 1.5, extent: [[-67.5, 17.5], [-65, 19]]})
+      .add(hawaii,
+           {translate: [-.19, .20], scale: 1,   extent: [[-164, 18], [-154, 24]]})
+      .add(alaska,
+           {translate: [-.40, .17], scale: .6,  extent: [[-180, 50], [-130, 72]]})
+      .projection(projection)
+    .scale(1000);
 };
 
 function d3_geo_albersUsaInvert(projection, extent) {
